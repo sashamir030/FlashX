@@ -69,8 +69,6 @@ function startGame() {
         });
 
         let metalWires = mapOblects.metalWire;
-        let metalPlatforms = []
-
         let fieldWidth = mapOblects.fieldWidth;
         let fieldHeight = mapOblects.fieldHeight;
 
@@ -114,6 +112,8 @@ function startGame() {
         let player = {
             x: 2790,
             y: 385,
+            prevX: 0,
+            prevY: 0,
             width: 28,
             height: 87,
             isCrouching: false,
@@ -170,6 +170,16 @@ function startGame() {
             jumpHeight: 100,
             weaponAngle: 0,
 
+            updatePrevPosition() {
+                this.prevX = this.x;
+                this.prevY = this.y;
+            },
+            getVelocity(dt = 1 / 60) {
+                return {
+                    vx: (this.x - this.prevX) / dt,
+                    vy: (this.y - this.prevY) / dt
+                };
+            },
             jump() {
                 if (!this.isJumping) {
                     this.isJumping = true;
@@ -249,6 +259,15 @@ function startGame() {
                                     }
                                 });
                                 break;
+                            case "metalPlatform":
+                                // Получаем скорость из разницы позиций
+                                const { vx, vy } = this.getVelocity(simulation.dt);
+
+                                const hitX = this.x;
+                                const hitY = this.y + this.height / 2;
+
+                                handleProjectileHit(hitX, hitY, vx, vy, this.velocity * 2);
+                                break;
                         }
                         // Рассчитываем перекрытия по осям
                         const overlapX = Math.min(
@@ -295,54 +314,6 @@ function startGame() {
                             } else {
                                 // Снизу
                                 this.y = obstacle.y + obstacle.height;
-                                this.velocity = this.gravity; // Отталкивание вниз
-                            }
-                        }
-                    }
-                });
-
-                // Обрабатываем столкновения с платформой
-                metalPlatforms.forEach((metalPlatform) => {
-                    if (this.isColliding(metalPlatform)) {
-
-                        // Рассчитываем перекрытия по осям
-                        const overlapX = Math.min(
-                            this.x + this.width - metalPlatform.x,
-                            metalPlatform.x + metalPlatform.width - this.x
-                        );
-
-                        const overlapY = Math.min(
-                            this.y + this.height - metalPlatform.y,
-                            metalPlatform.y + metalPlatform.height - this.y
-                        );
-
-                        // Определяем направление столкновения
-                        if (overlapX < overlapY) {
-                            // Горизонтальное столкновение
-                            if (this.x < metalPlatform.x) {
-                                // Слева
-                                this.x = metalPlatform.x - this.width;
-                            } else {
-                                // Справа
-                                this.x = metalPlatform.x + metalPlatform.width;
-                            }
-
-                        } else {
-                            // Вертикальное столкновение
-                            if (this.y < metalPlatform.y) {
-                                // Сверху
-                                this.y = metalPlatform.y - this.height + 1;
-                                this.velocity = 0;
-                                this.isJumping = false;
-                                if (this.touchObst !== metalPlatform) {
-                                    this.touchObst = metalPlatform
-                                    this.positionOnPlatform = metalPlatform.x
-                                }
-                                this.x += metalPlatform.x - this.positionOnPlatform
-
-                            } else {
-                                // Снизу
-                                this.y = metalPlatform.y + metalPlatform.height;
                                 this.velocity = this.gravity; // Отталкивание вниз
                             }
                         }
@@ -1837,6 +1808,33 @@ function startGame() {
                 leftIndex, rightIndex,
                 gravity,
 
+                applyForce(massIndex, fx, fy, dt) {
+                    if (massIndex <= 0 || massIndex >= this.masses.length) return;
+                    if (this.masses[massIndex] <= 0) return; // Неподвижные точки игнорируем
+
+                    const ax = fx / this.masses[massIndex];
+                    const ay = fy / this.masses[massIndex];
+
+                    this.vel[massIndex].x += ax * dt;
+                    this.vel[massIndex].y += ay * dt;
+                },
+
+                getClosestMassIndex(targetX, targetY, maxDist = 50) {
+                    let minDist = maxDist * maxDist;
+                    let closestIndex = -1;
+
+                    for (let i = 1; i < this.pos.length; i++) {
+                        const dx = this.pos[i].x - targetX;
+                        const dy = this.pos[i].y - targetY;
+                        const distSq = dx * dx + dy * dy;
+                        if (distSq < minDist) {
+                            minDist = distSq;
+                            closestIndex = i;
+                        }
+                    }
+                    return closestIndex;
+                },
+
                 simulate(dt, iterations = 10, damping = 0.995) {
                     // Интеграция Верле (только для подвижных точек)
                     for (let i = 1; i < this.masses.length; i++) {
@@ -1898,15 +1896,29 @@ function startGame() {
                         }
                     }
 
+                    let totalMass = 0;
+                    let vx = 0, vy = 0;
+
                     // Обновление скоростей и применение демпфирования
                     for (let i = 1; i < this.masses.length; i++) {
                         if (this.masses[i] > 0) {
                             this.vel[i].x = (this.pos[i].x - this.prevPos[i].x) / dt;
                             this.vel[i].y = (this.pos[i].y - this.prevPos[i].y) / dt;
+
+                            totalMass += this.masses[i];
+                            vx += this.vel[i].x * this.masses[i];
+                            vy += this.vel[i].y * this.masses[i];
+
                             // Демпфирование (вязкое затухание)
                             this.vel[i].x *= damping;
                             this.vel[i].y *= damping;
                         }
+                    }
+
+                    if (totalMass > 0) {
+                        const vxAvg = vx / totalMass;
+                        const vyAvg = vy / totalMass;
+                        this.speedPlatform = Math.sqrt(vxAvg * vxAvg + vyAvg * vyAvg);
                     }
                 },
 
@@ -1928,8 +1940,8 @@ function startGame() {
                         ctx.translate(centerX, centerY);
                         ctx.rotate(-angle);
 
-                        const textureWidth = metalWires[0].width;   // длина текстуры вдоль верёвки
-                        const textureHeight = metalWires[0].height; // толщина
+                        const textureWidth = metalWires[0].width;
+                        const textureHeight = metalWires[0].height;
 
                         ctx.drawImage(
                             wireTexture,
@@ -1950,11 +1962,14 @@ function startGame() {
                     const platformLength = Math.sqrt(dx * dx + dy * dy);
                     const platformHeight = 20;
 
-                    Object.assign(metalPlatforms[0], {
+                    Object.assign(obstacles.find(obst => obst.type == "metalPlatform"), {
                         width: platformLength,
                         height: platformHeight,
                         x: left.x,
-                        y: right.y - platformHeight / 2
+                        y: right.y - platformHeight / 2,
+                        vx: dx,
+                        vy: dy,
+                        speedPlatform: this.speedPlatform,
                     });
 
                     ctx.save();
@@ -1970,6 +1985,108 @@ function startGame() {
                     ctx.restore();
                 }
             };
+
+        }
+
+        function handleProjectileHit(hitX, hitY, vx, vy, mass) {
+
+            // 1. Проверяем попадание в платформу
+            const platformHit = checkPlatformHit(hitX, hitY);
+
+            if (platformHit.hit) {
+                // Попадание в платформу - распределяем силу между точками подвеса
+                applyForceToPlatform(platformHit, vx, vy, mass);
+                return;
+            }
+        }
+
+        //  Проверяет попадание в платформу
+        function checkPlatformHit(hitX, hitY) {
+            const system = simulation.system;
+            const left = system.pos[system.leftIndex];
+            const right = system.pos[system.rightIndex];
+
+            // Вычисляем расстояние от точки до отрезка платформы
+            const distance = pointToLineSegmentDistance(hitX, hitY, left.x, left.y, right.x, right.y);
+            // Определяем относительную позицию попадания вдоль платформы (0..1)
+            const t = getProjectionParameter(hitX, hitY, left.x, left.y, right.x, right.y);
+            return {
+                hit: true,
+                distance: distance,
+                t: Math.max(0, Math.min(1, t)), // Параметр 0..1 (0 = левый край, 1 = правый)
+                leftPos: left,
+                rightPos: right
+            };
+        }
+
+        //Применяет силу к платформе с учетом точки попадания
+        function applyForceToPlatform(platformHit, bulletVx, bulletVy, bulletMass) {
+            const system = simulation.system;
+
+            // Расчет импульса от пули
+            const bulletSpeed = Math.sqrt(bulletVx * bulletVx + bulletVy * bulletVy);
+            const impactForce = bulletMass * bulletSpeed * 5; // Коэффициент усиления для заметности
+
+            // Направление силы (в направлении движения пули)
+            const forceAngle = Math.atan2(bulletVy, bulletVx);
+            const fx = Math.cos(forceAngle) * impactForce;
+            const fy = Math.sin(forceAngle) * impactForce;
+
+            // Распределяем силу между левой и правой точками подвеса
+            // в зависимости от места попадания (t = 0..1)
+            const t = platformHit.t;
+
+            // Левая точка получает больше силы при попадании ближе к левому краю
+            const leftForceMultiplier = 1.0 - t;
+            const rightForceMultiplier = t;
+
+            // Дополнительный вертикальный импульс для имитации "подбрасывания" платформы
+            const upwardBonus = -Math.abs(fy) * 0.3; // Небольшой подброс вверх
+
+            // Применяем силы к точкам подвеса платформы
+            system.applyForce(system.leftIndex,
+                fx * leftForceMultiplier,
+                fy * leftForceMultiplier + upwardBonus * leftForceMultiplier,
+                simulation.dt
+            );
+
+            system.applyForce(system.rightIndex,
+                fx * rightForceMultiplier,
+                fy * rightForceMultiplier + upwardBonus * rightForceMultiplier,
+                simulation.dt
+            );
+        }
+
+
+        //   Вспомогательная функция: расстояние от точки до отрезка
+        function pointToLineSegmentDistance(px, py, x1, y1, x2, y2) {
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const lengthSquared = dx * dx + dy * dy;
+
+            if (lengthSquared === 0) {
+                return Math.sqrt((px - x1) ** 2 + (py - y1) ** 2);
+            }
+
+            let t = ((px - x1) * dx + (py - y1) * dy) / lengthSquared;
+            t = Math.max(0, Math.min(1, t));
+
+            const projX = x1 + t * dx;
+            const projY = y1 + t * dy;
+
+            return Math.sqrt((px - projX) ** 2 + (py - projY) ** 2);
+        }
+
+
+        // Вспомогательная функция: параметр проекции точки на отрезок (0..1)
+        function getProjectionParameter(px, py, x1, y1, x2, y2) {
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const lengthSquared = dx * dx + dy * dy;
+
+            if (lengthSquared === 0) return 0;
+
+            return ((px - x1) * dx + (py - y1) * dy) / lengthSquared;
         }
 
         // --- Инициализация ---
@@ -1980,11 +2097,14 @@ function startGame() {
         const platformMass = 50.0; // общая масса платформы
         const platformWidth = wires2[0].x - wires1[0].x; // расстояние между точками крепления
 
-        metalPlatforms.push({
+        obstacles.push({
             width: 0,
             height: 0,
             x: 0,
             y: 0,
+            type: "metalPlatform",
+            intObst: true,
+            speedPlatform: 0
         })
 
         // Создаём единую систему с гравитацией 40
@@ -2184,28 +2304,28 @@ function startGame() {
         }
 
         //Управление движением лифта при контакте с объектом
-        function motionUpDynamicObstacle(dynamicObstacle) {
-            // Начинаем подъём
-            const moveUpInterval = setInterval(() => {
-                if (dynamicObstacle.y > dynamicObstacle.levelUp) {
-                    dynamicObstacle.y -= 1;
-                } else {
-                    clearInterval(moveUpInterval);
+        // function motionUpDynamicObstacle(dynamicObstacle) {
+        //     // Начинаем подъём
+        //     const moveUpInterval = setInterval(() => {
+        //         if (dynamicObstacle.y > dynamicObstacle.levelUp) {
+        //             dynamicObstacle.y -= 1;
+        //         } else {
+        //             clearInterval(moveUpInterval);
 
-                    // Ждём 3 секунды и начинаем опускание
-                    setTimeout(() => {
-                        const moveDownInterval = setInterval(() => {
-                            if (dynamicObstacle.y < dynamicObstacle.levelDown) {
-                                dynamicObstacle.y += 1;
-                            } else {
-                                clearInterval(moveDownInterval);
-                                dynamicObstacle.worked = false;
-                            }
-                        }, 5); // Интервал для плавности опускания
-                    }, 2000);
-                }
-            }, 5); // Интервал для плавности подъёма
-        }
+        //             // Ждём 3 секунды и начинаем опускание
+        //             setTimeout(() => {
+        //                 const moveDownInterval = setInterval(() => {
+        //                     if (dynamicObstacle.y < dynamicObstacle.levelDown) {
+        //                         dynamicObstacle.y += 1;
+        //                     } else {
+        //                         clearInterval(moveDownInterval);
+        //                         dynamicObstacle.worked = false;
+        //                     }
+        //                 }, 5); // Интервал для плавности опускания
+        //             }, 2000);
+        //         }
+        //     }, 5); // Интервал для плавности подъёма
+        // }
 
         //Управление движением лифта
         function motionDynamicObstacle() {
@@ -2239,11 +2359,14 @@ function startGame() {
             for (let intObstacle of obstacles) {
                 if (intObstacle.intObst == true) {
                     // Применяем гравитацию
-                    intObstacle.velocity += intObstacle.gravity;
-                    intObstacle.y += intObstacle.velocity;
+                    if (intObstacle.gravity) {
+                        intObstacle.velocity += intObstacle.gravity;
+                        intObstacle.y += intObstacle.velocity;
+                    }
                     for (let obstacle of obstacles) {
                         if (intObstacle !== obstacle) {
                             if (isCollidingObstacles(obstacle, intObstacle)) {
+
                                 // Рассчитываем перекрытия по осям
                                 const overlapX = Math.min(
                                     intObstacle.x + intObstacle.width - obstacle.x,
@@ -2254,6 +2377,26 @@ function startGame() {
                                     intObstacle.y + intObstacle.height - obstacle.y,
                                     obstacle.y + obstacle.height - intObstacle.y
                                 );
+
+                                if (intObstacle.type == "metalPlatform") {
+
+                                    const hitX = obstacle.x;
+                                    const hitY = obstacle.y + obstacle.height / 2;
+
+                                    if (obstacle.intObst !== true) {
+                                        handleProjectileHit(hitX, hitY, -intObstacle.vx, -intObstacle.vy, intObstacle.speedPlatform / 10);
+                                    }
+                                }
+                                
+                                if (obstacle.type == "metalPlatform") {
+
+                                    const hitX = intObstacle.x;
+                                    const hitY = intObstacle.y + intObstacle.height / 2;
+
+                                    handleProjectileHit(hitX, hitY, 0, 500, intObstacle.lastVelocity * intObstacle.mass);
+
+                                }
+
 
                                 // Определяем направление столкновения
                                 if (overlapX < overlapY) {
@@ -2267,6 +2410,7 @@ function startGame() {
                                     }
 
                                 } else {
+                                    intObstacle.lastVelocity = intObstacle.velocity
                                     // Вертикальное столкновение
                                     if (intObstacle.y < obstacle.y) {
                                         // Сверху
@@ -2289,55 +2433,10 @@ function startGame() {
                         }
                     }
 
-                    // Обрабатываем столкновения с платформой
-                    metalPlatforms.forEach((metalPlatform) => {
-                        if (isCollidingObstacles(metalPlatform, intObstacle)) {
-
-                            // Рассчитываем перекрытия по осям
-                            const overlapX = Math.min(
-                                intObstacle.x + intObstacle.width - metalPlatform.x,
-                                metalPlatform.x + metalPlatform.width - intObstacle.x
-                            );
-
-                            const overlapY = Math.min(
-                                intObstacle.y + intObstacle.height - metalPlatform.y,
-                                metalPlatform.y + metalPlatform.height - intObstacle.y
-                            );
-
-                            // Определяем направление столкновения
-                            if (overlapX < overlapY) {
-                                // Горизонтальное столкновение
-                                if (intObstacle.x < metalPlatform.x) {
-                                    // Слева
-                                    intObstacle.x = metalPlatform.x - intObstacle.width;
-                                } else {
-                                    // Справа
-                                    intObstacle.x = metalPlatform.x + metalPlatform.width;
-                                }
-
-                            } else {
-                                // Вертикальное столкновение
-                                if (intObstacle.y < metalPlatform.y) {
-                                    // Сверху
-                                    intObstacle.y = metalPlatform.y - intObstacle.height + 1;
-                                    intObstacle.velocity = 0;
-                                    if (intObstacle.touchObst !== metalPlatform) {
-                                        intObstacle.touchObst = metalPlatform
-                                        intObstacle.positionOnPlatform = metalPlatform.x
-                                    }
-                                    intObstacle.x += metalPlatform.x - intObstacle.positionOnPlatform
-                                } else {
-                                    // Снизу
-                                    intObstacle.y = metalPlatform.y + metalPlatform.height;
-                                    intObstacle.velocity = intObstacle.gravity; // Отталкивание вниз
-                                }
-                            }
-                        }
-                    });
-
                     //Обновляем позицию объекта с последним объектом
-                    updatePositionOnObst(intObstacle, intObstacle.touchObst)
-
+                    if (intObstacle.touchObst) {
+                        updatePositionOnObst(intObstacle, intObstacle.touchObst)
+                    }
                 }
             }
         }
@@ -2883,66 +2982,6 @@ function startGame() {
                     return
                 }
 
-                //Сталкивание пули и платформы
-                metalPlatforms.forEach((metalPlatform) => {
-                    if (isCollidingBullet(bullet, metalPlatform)) {
-                        // Рассчитываем перекрытия по осям
-                        const overlapX = Math.min(
-                            bullet.x - metalPlatform.x,
-                            metalPlatform.x + metalPlatform.width - bullet.x
-                        );
-
-                        const overlapY = Math.min(
-                            bullet.y - metalPlatform.y,
-                            metalPlatform.y + metalPlatform.height - bullet.y
-                        );
-
-                        const minOverlap = Math.min(overlapX, overlapY);
-                        let handled = false;
-
-                        // Обрабатываем горизонтальные столкновения (левая/правая сторона)
-                        if (overlapX === minOverlap) {
-                            if (bullet.x < metalPlatform.x) {
-                                if ((bullet.angle > 0.9 && bullet.angle < 1.5) ||
-                                    (bullet.angle < -0.9 && bullet.angle > -1.5)) {
-                                    bullet.velocityX = -bullet.velocityX;
-                                    bullet.angle = Math.atan2(bullet.velocityY, bullet.velocityX);
-                                    handled = true;
-                                }
-                            } else {
-                                if ((bullet.angle > 1.5 && bullet.angle < 2.0) ||
-                                    (bullet.angle < -1.5 && bullet.angle > -2.0)) {
-                                    bullet.velocityX = -bullet.velocityX;
-                                    bullet.angle = Math.atan2(bullet.velocityY, bullet.velocityX);
-                                    handled = true;
-                                }
-                            }
-                        }
-
-                        // Если не обработано, пробуем вертикальные столкновения
-                        if (!handled && overlapY === minOverlap) {
-                            if (bullet.y < metalPlatform.y) {
-                                if (bullet.angle > 2.9 || bullet.angle < 0.2) {
-                                    bullet.velocityY = -bullet.velocityY;
-                                    bullet.angle = Math.atan2(bullet.velocityY, bullet.velocityX);
-                                    handled = true;
-                                }
-                            } else {
-                                if (bullet.angle < -2.9 || (bullet.angle > -0.2 && bullet.angle < 0)) {
-                                    bullet.velocityY = -bullet.velocityY;
-                                    bullet.angle = Math.atan2(bullet.velocityY, bullet.velocityX);
-                                    handled = true;
-                                }
-                            }
-                        }
-
-                        if (!handled) {
-                            bullets.splice(index, 1);
-                            return
-                        }
-                    }
-                });
-
                 // Проверяем сталкивается ли пуля с препятствием
                 for (let obstacle of obstacles) {
                     if (isCollidingBullet(bullet, obstacle)) {
@@ -2977,6 +3016,18 @@ function startGame() {
                                     }
                                 }
                             }
+                        }
+
+                        if (obstacle.type == "metalPlatform") {
+                            const hitX = bullet.x;
+                            const hitY = bullet.y;
+                            const bulletSpeed = 500; // скорость пули в пикселях/сек
+                            const vx = Math.cos(bullet.angle) * bulletSpeed;
+                            const vy = Math.sin(bullet.angle) * bulletSpeed;
+                            const mass = 1.0;
+
+                            // Обрабатываем попадание
+                            handleProjectileHit(hitX, hitY, vx, vy, mass);
                         }
 
                         // Обрабатываем горизонтальные столкновения (левая/правая сторона)
@@ -3194,6 +3245,7 @@ function startGame() {
                 frameCount++;
                 ctx.clearRect(0, 0, fieldWidth, fieldHeight);
                 // Сначала обновляем состояние
+
                 player.update(obstacles, transitionBlocks);
                 updateEnemiesAI();
 
@@ -3201,7 +3253,6 @@ function startGame() {
                 updateCamera();
                 ctx.save();
                 ctx.translate(-camera.x, -camera.y);
-
 
                 drawBackground();
 
@@ -3213,16 +3264,14 @@ function startGame() {
                 drawObstacles();
                 updateObstacle()
                 if (debbug_mode == true) debbugMode()
+                drawUnified(ctx);
                 updateBullets(obstacles, enemies);
                 drawBullets();
-                drawUnified(ctx);
                 updateGrenades(obstacles);
                 updateParticles();
                 drawGrenades();
                 drawParticles();
                 drawCrosshair(mouseX, mouseY);
-
-
                 motionDynamicObstacle()
 
                 ctx.restore();
@@ -3230,7 +3279,7 @@ function startGame() {
                 drawToolbar();
 
                 player.isMoving = false;
-
+                player.updatePrevPosition()
                 // Обработка управления
                 if (keysPressed.KeyA) {
                     player.x -= player.isCrouching ? player.speed / 2 : player.speed;
